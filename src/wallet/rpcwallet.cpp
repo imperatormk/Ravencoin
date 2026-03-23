@@ -1792,6 +1792,11 @@ void ListTransactions(CWallet* const pwallet, const CWalletTx& wtx, const std::s
     UniValue assetDetails(UniValue::VARR);
 
     ListTransactions(pwallet, wtx, strAccount, nMinDepth, fLong, ret, assetDetails, filter);
+
+    // Include asset transactions in the result
+    for (size_t i = 0; i < assetDetails.size(); i++) {
+        ret.push_back(assetDetails[i]);
+    }
 }
 
 void AcentryToJSON(const CAccountingEntry& acentry, const std::string& strAccount, UniValue& ret)
