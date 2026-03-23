@@ -3751,13 +3751,18 @@ bool GetBestAssetAddressAmount(CAssetsCache& cache, const std::string& assetName
 #ifdef ENABLE_WALLET
 //! sets _balances_ with the total quantity of each owned asset
 bool GetAllMyAssetBalances(std::map<std::string, std::vector<COutput> >& outputs, std::map<std::string, CAmount>& amounts, const int confirmations, const std::string& prefix) {
-
-    // Return false if no wallet was found to compute asset balances
     if (!vpwallets.size())
+        return false;
+    return GetAllMyAssetBalances(vpwallets[0], outputs, amounts, confirmations, prefix);
+}
+
+bool GetAllMyAssetBalances(CWallet* pwallet, std::map<std::string, std::vector<COutput> >& outputs, std::map<std::string, CAmount>& amounts, const int confirmations, const std::string& prefix) {
+
+    if (!pwallet)
         return false;
 
     // Get the map of assetnames to outputs
-    vpwallets[0]->AvailableAssets(outputs, true, nullptr, 1, MAX_MONEY, MAX_MONEY, 0, confirmations);
+    pwallet->AvailableAssets(outputs, true, nullptr, 1, MAX_MONEY, MAX_MONEY, 0, confirmations);
 
     // Loop through all pairs of Asset Name -> vector<COutput>
     for (const auto& pair : outputs) {

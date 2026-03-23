@@ -3009,6 +3009,156 @@ UniValue listwallets(const JSONRPCRequest& request)
     return obj;
 }
 
+extern CScheduler* pScheduler; // defined in init.cpp
+
+UniValue createwallet(const JSONRPCRequest& request)
+{
+    if (request.fHelp || request.params.size() < 1 || request.params.size() > 1)
+        throw std::runtime_error(
+            "createwallet \"wallet_name\"\n"
+            "\nCreates and loads a new wallet.\n"
+            "\nArguments:\n"
+            "1. \"wallet_name\"    (string, required) The name for the new wallet.\n"
+            "                     The wallet is created in the data directory.\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"name\": \"wallet_name\",  (string) The wallet name\n"
+            "  \"warning\": \"...\",       (string) Any warnings\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("createwallet", "\"mywallet\"")
+            + HelpExampleRpc("createwallet", "\"mywallet\"")
+        );
+
+    std::string walletName = request.params[0].get_str();
+
+    // Check if wallet name is valid
+    if (walletName.empty())
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Wallet name cannot be empty");
+
+    // Check for path separators
+    if (walletName.find('/') != std::string::npos || walletName.find('\\') != std::string::npos)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Wallet name cannot contain path separators");
+
+    // Check if already loaded
+    for (CWalletRef pwallet : vpwallets) {
+        if (pwallet->GetName() == walletName) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Wallet \"" + walletName + "\" is already loaded");
+        }
+    }
+
+    // Create the wallet
+    CWallet* pwallet = CWallet::CreateWalletFromFile(walletName);
+    if (!pwallet) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "Failed to create wallet \"" + walletName + "\"");
+    }
+
+    vpwallets.push_back(pwallet);
+
+    // Run post-init if scheduler is available
+    if (pScheduler) {
+        pwallet->postInitProcess(*pScheduler);
+    }
+
+    UniValue obj(UniValue::VOBJ);
+    obj.push_back(Pair("name", pwallet->GetName()));
+    obj.push_back(Pair("warning", ""));
+    return obj;
+}
+
+UniValue loadwallet(const JSONRPCRequest& request)
+{
+    if (request.fHelp || request.params.size() != 1)
+        throw std::runtime_error(
+            "loadwallet \"filename\"\n"
+            "\nLoads a wallet from a wallet file.\n"
+            "Note that all wallet command-line options used when starting ravend\n"
+            "will be applied to the new wallet.\n"
+            "\nArguments:\n"
+            "1. \"filename\"    (string, required) The wallet file name (in the data directory)\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"name\": \"wallet_name\",  (string) The wallet name\n"
+            "  \"warning\": \"...\",       (string) Any warnings\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("loadwallet", "\"wallet2.dat\"")
+            + HelpExampleRpc("loadwallet", "\"wallet2.dat\"")
+        );
+
+    std::string walletFile = request.params[0].get_str();
+
+    if (walletFile.empty())
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Wallet filename cannot be empty");
+
+    // Check if already loaded
+    for (CWalletRef pw : vpwallets) {
+        if (pw->GetName() == walletFile) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Wallet \"" + walletFile + "\" is already loaded");
+        }
+    }
+
+    // Load the wallet
+    CWallet* pwallet = CWallet::CreateWalletFromFile(walletFile);
+    if (!pwallet) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "Failed to load wallet \"" + walletFile + "\"");
+    }
+
+    vpwallets.push_back(pwallet);
+
+    if (pScheduler) {
+        pwallet->postInitProcess(*pScheduler);
+    }
+
+    UniValue obj(UniValue::VOBJ);
+    obj.push_back(Pair("name", pwallet->GetName()));
+    obj.push_back(Pair("warning", ""));
+    return obj;
+}
+
+UniValue unloadwallet(const JSONRPCRequest& request)
+{
+    if (request.fHelp || request.params.size() != 1)
+        throw std::runtime_error(
+            "unloadwallet \"wallet_name\"\n"
+            "\nUnloads a wallet.\n"
+            "The wallet must be currently loaded. The default wallet cannot be unloaded.\n"
+            "\nArguments:\n"
+            "1. \"wallet_name\"    (string, required) The name of the wallet to unload\n"
+            "\nExamples:\n"
+            + HelpExampleCli("unloadwallet", "\"mywallet\"")
+            + HelpExampleRpc("unloadwallet", "\"mywallet\"")
+        );
+
+    std::string walletName = request.params[0].get_str();
+
+    // Don't allow unloading the last wallet
+    if (vpwallets.size() <= 1)
+        throw JSONRPCError(RPC_WALLET_ERROR, "Cannot unload the only loaded wallet");
+
+    // Find and remove the wallet
+    CWallet* target = nullptr;
+    auto it = vpwallets.begin();
+    for (; it != vpwallets.end(); ++it) {
+        if ((*it)->GetName() == walletName) {
+            target = *it;
+            break;
+        }
+    }
+
+    if (!target)
+        throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Wallet \"" + walletName + "\" not found");
+
+    // Flush and close
+    target->Flush(true);
+    UnregisterValidationInterface(target);
+    vpwallets.erase(it);
+    delete target;
+
+    UniValue obj(UniValue::VOBJ);
+    return obj;
+}
+
 UniValue resendwallettransactions(const JSONRPCRequest& request)
 {
     CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
@@ -3704,6 +3854,9 @@ static const CRPCCommand commands[] =
     { "wallet",             "listassettransactions",    &listassettransactions,    {"asset","count","skip","include_watchonly"} },
     { "wallet",             "listunspent",              &listunspent,              {"minconf","maxconf","addresses","include_unsafe","query_options"} },
     { "wallet",             "listwallets",              &listwallets,              {} },
+    { "wallet",             "createwallet",             &createwallet,             {"wallet_name"} },
+    { "wallet",             "loadwallet",               &loadwallet,               {"filename"} },
+    { "wallet",             "unloadwallet",             &unloadwallet,             {"wallet_name"} },
     { "wallet",             "lockunspent",              &lockunspent,              {"unlock","transactions"} },
     { "wallet",             "move",                     &movecmd,                  {"fromaccount","toaccount","amount","minconf","comment"} },
     { "wallet",             "sendfrom",                 &sendfrom,                 {"fromaccount","toaddress","amount","minconf","comment","comment_to"} },
