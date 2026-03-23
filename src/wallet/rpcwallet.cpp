@@ -1947,6 +1947,140 @@ UniValue listtransactions(const JSONRPCRequest& request)
     return ret;
 }
 
+UniValue listassettransactions(const JSONRPCRequest& request)
+{
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp)) {
+        return NullUniValue;
+    }
+
+    if (request.fHelp || request.params.size() > 4)
+        throw std::runtime_error(
+            "listassettransactions ( \"asset\" count skip include_watchonly )\n"
+            "\nReturns asset transfer transactions from the wallet.\n"
+            "Unlike listtransactions, this returns ONLY asset movements (no RVN-only transactions).\n"
+            "\nArguments:\n"
+            "1. \"asset\"             (string, optional, default=\"*\") Filter by asset name. Use \"*\" for all assets.\n"
+            "2. count                (numeric, optional, default=20) The number of transactions to return\n"
+            "3. skip                 (numeric, optional, default=0) The number of transactions to skip\n"
+            "4. include_watchonly    (bool, optional, default=false) Include watch-only addresses\n"
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"asset_name\": \"name\",       (string) The asset name\n"
+            "    \"asset_type\": \"type\",       (string) The transaction type (e.g. transfer_asset, new_asset, reissue_asset)\n"
+            "    \"amount\": x.xxx,             (numeric) The amount transferred\n"
+            "    \"address\": \"address\",       (string) The destination address\n"
+            "    \"category\": \"send|receive\", (string) Whether this was a send or receive from the wallet's perspective\n"
+            "    \"vout\": n,                   (numeric) The output index\n"
+            "    \"confirmations\": n,          (numeric) The number of confirmations\n"
+            "    \"blockhash\": \"hash\",        (string) The block hash\n"
+            "    \"blockindex\": n,             (numeric) The block index\n"
+            "    \"blocktime\": n,              (numeric) The block time\n"
+            "    \"txid\": \"txid\",             (string) The transaction id\n"
+            "    \"time\": n,                   (numeric) The transaction time\n"
+            "    \"timereceived\": n,           (numeric) The time received\n"
+            "    \"message\": \"msg\",           (string) The IPFS message if any\n"
+            "  }\n"
+            "]\n"
+            "\nExamples:\n"
+            "\nList all asset transactions\n"
+            + HelpExampleCli("listassettransactions", "") +
+            "\nList transactions for a specific asset\n"
+            + HelpExampleCli("listassettransactions", "\"MYASSET\"") +
+            "\nList 50 transactions, skipping the first 10\n"
+            + HelpExampleCli("listassettransactions", "\"*\" 50 10")
+        );
+
+    ObserveSafeMode();
+    LOCK2(cs_main, pwallet->cs_wallet);
+
+    std::string assetFilter = "*";
+    if (request.params.size() > 0 && !request.params[0].isNull())
+        assetFilter = request.params[0].get_str();
+    int nCount = 20;
+    if (request.params.size() > 1 && !request.params[1].isNull()) {
+        if (request.params[1].isNum())
+            nCount = request.params[1].get_int();
+        else
+            nCount = atoi(request.params[1].get_str().c_str());
+    }
+    int nFrom = 0;
+    if (request.params.size() > 2 && !request.params[2].isNull()) {
+        if (request.params[2].isNum())
+            nFrom = request.params[2].get_int();
+        else
+            nFrom = atoi(request.params[2].get_str().c_str());
+    }
+    isminefilter filter = ISMINE_SPENDABLE;
+    if (request.params.size() > 3 && !request.params[3].isNull())
+        if (request.params[3].get_bool())
+            filter = filter | ISMINE_WATCH_ONLY;
+
+    if (nCount < 0)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Negative count");
+    if (nFrom < 0)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Negative from");
+
+    UniValue ret(UniValue::VARR);
+
+    const CWallet::TxItems & txOrdered = pwallet->wtxOrdered;
+
+    // Iterate backwards through all wallet transactions
+    for (CWallet::TxItems::const_reverse_iterator it = txOrdered.rbegin(); it != txOrdered.rend(); ++it)
+    {
+        CWalletTx *const pwtx = (*it).second.first;
+        if (pwtx == nullptr)
+            continue;
+
+        // Get asset entries using the asset-aware overload
+        UniValue rvnEntries(UniValue::VARR);
+        UniValue assetEntries(UniValue::VARR);
+        ListTransactions(pwallet, *pwtx, "*", 0, true, rvnEntries, assetEntries, filter);
+
+        // Add matching asset entries to result
+        for (size_t i = 0; i < assetEntries.size(); i++) {
+            const UniValue& entry = assetEntries[i];
+
+            // Apply asset name filter
+            if (assetFilter != "*") {
+                std::string entryAssetName = entry["asset_name"].get_str();
+                if (entryAssetName != assetFilter)
+                    continue;
+            }
+
+            ret.push_back(entry);
+        }
+
+        if ((int)ret.size() >= (nCount + nFrom))
+            break;
+    }
+
+    // Apply skip and count
+    if (nFrom > (int)ret.size())
+        nFrom = ret.size();
+    if ((nFrom + nCount) > (int)ret.size())
+        nCount = ret.size() - nFrom;
+
+    std::vector<UniValue> arrTmp = ret.getValues();
+
+    std::vector<UniValue>::iterator first = arrTmp.begin();
+    std::advance(first, nFrom);
+    std::vector<UniValue>::iterator last = arrTmp.begin();
+    std::advance(last, nFrom + nCount);
+
+    if (last != arrTmp.end()) arrTmp.erase(last, arrTmp.end());
+    if (first != arrTmp.begin()) arrTmp.erase(arrTmp.begin(), first);
+
+    std::reverse(arrTmp.begin(), arrTmp.end()); // Return oldest to newest
+
+    ret.clear();
+    ret.setArray();
+    ret.push_backV(arrTmp);
+
+    return ret;
+}
+
 UniValue listaccounts(const JSONRPCRequest& request)
 {
     CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
@@ -3567,6 +3701,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "listreceivedbyaddress",    &listreceivedbyaddress,    {"minconf","include_empty","include_watchonly"} },
     { "wallet",             "listsinceblock",           &listsinceblock,           {"blockhash","target_confirmations","include_watchonly","include_removed"} },
     { "wallet",             "listtransactions",         &listtransactions,         {"account","count","skip","include_watchonly"} },
+    { "wallet",             "listassettransactions",    &listassettransactions,    {"asset","count","skip","include_watchonly"} },
     { "wallet",             "listunspent",              &listunspent,              {"minconf","maxconf","addresses","include_unsafe","query_options"} },
     { "wallet",             "listwallets",              &listwallets,              {} },
     { "wallet",             "lockunspent",              &lockunspent,              {"unlock","transactions"} },
